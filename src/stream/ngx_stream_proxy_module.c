@@ -28,6 +28,7 @@ typedef struct {
     ngx_stream_complex_value_t      *download_rate;
     ngx_uint_t                       requests;
     ngx_uint_t                       responses;
+    ngx_uint_t                       requests;
     ngx_uint_t                       next_upstream_tries;
     ngx_flag_t                       next_upstream;
     ngx_flag_t                       proxy_protocol;
@@ -105,6 +106,8 @@ static ngx_int_t ngx_stream_proxy_ssl_name(ngx_stream_session_t *s);
 static ngx_int_t ngx_stream_proxy_ssl_certificate(ngx_stream_session_t *s);
 static ngx_int_t ngx_stream_proxy_set_ssl(ngx_conf_t *cf,
     ngx_stream_proxy_srv_conf_t *pscf);
+static char *ngx_stream_proxy_set_ssl_protocols(ngx_conf_t *cf,
+    ngx_command_t *cmd, void *conf);
 
 
 static ngx_conf_bitmask_t  ngx_stream_proxy_ssl_protocols[] = {
@@ -114,6 +117,8 @@ static ngx_conf_bitmask_t  ngx_stream_proxy_ssl_protocols[] = {
     { ngx_string("TLSv1.1"), NGX_SSL_TLSv1_1 },
     { ngx_string("TLSv1.2"), NGX_SSL_TLSv1_2 },
     { ngx_string("TLSv1.3"), NGX_SSL_TLSv1_3 },
+    { ngx_string("DTLSv1"), NGX_SSL_DTLSv1 },
+    { ngx_string("DTLSv1.2"), NGX_SSL_DTLSv1_2 },
     { ngx_null_string, 0 }
 };
 
@@ -218,6 +223,13 @@ static ngx_command_t  ngx_stream_proxy_commands[] = {
       offsetof(ngx_stream_proxy_srv_conf_t, responses),
       NULL },
 
+    { ngx_string("proxy_requests"),
+      NGX_STREAM_MAIN_CONF|NGX_STREAM_SRV_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_num_slot,
+      NGX_STREAM_SRV_CONF_OFFSET,
+      offsetof(ngx_stream_proxy_srv_conf_t, requests),
+      NULL },
+
     { ngx_string("proxy_next_upstream"),
       NGX_STREAM_MAIN_CONF|NGX_STREAM_SRV_CONF|NGX_CONF_FLAG,
       ngx_conf_set_flag_slot,
@@ -271,7 +283,7 @@ static ngx_command_t  ngx_stream_proxy_commands[] = {
 
     { ngx_string("proxy_ssl_protocols"),
       NGX_STREAM_MAIN_CONF|NGX_STREAM_SRV_CONF|NGX_CONF_1MORE,
-      ngx_conf_set_bitmask_slot,
+      ngx_stream_proxy_set_ssl_protocols,
       NGX_STREAM_SRV_CONF_OFFSET,
       offsetof(ngx_stream_proxy_srv_conf_t, ssl_protocols),
       &ngx_stream_proxy_ssl_protocols },
@@ -445,23 +457,34 @@ ngx_stream_proxy_handler(ngx_stream_session_t *s)
         return;
     }
 
-    p = ngx_pnalloc(c->pool, pscf->buffer_size);
-    if (p == NULL) {
-        ngx_stream_proxy_finalize(s, NGX_STREAM_INTERNAL_SERVER_ERROR);
-        return;
-    }
+    if (c->type == SOCK_STREAM || (c->type == SOCK_DGRAM && c->ssl)
+        || (c->shared && pscf->requests))
+    {
+        p = ngx_pnalloc(c->pool, pscf->buffer_size);
+        if (p == NULL) {
+            ngx_stream_proxy_finalize(s, NGX_STREAM_INTERNAL_SERVER_ERROR);
+            return;
+        }
 
-    u->downstream_buf.start = p;
-    u->downstream_buf.end = p + pscf->buffer_size;
-    u->downstream_buf.pos = p;
-    u->downstream_buf.last = p;
+        u->downstream_buf.start = p;
+        u->downstream_buf.end = p + pscf->buffer_size;
+        u->downstream_buf.pos = p;
+        u->downstream_buf.last = p;
 
-    if (c->read->ready) {
-        ngx_post_event(c->read, &ngx_posted_events);
+        if (c->read->ready) {
+            ngx_post_event(c->read, &ngx_posted_events);
+        }
     }
 
     if (pscf->upstream_value) {
         if (ngx_stream_proxy_eval(s, pscf) != NGX_OK) {
+            ngx_stream_proxy_finalize(s, NGX_STREAM_INTERNAL_SERVER_ERROR);
+            return;
+        }
+    }
+
+    if (c->shared && pscf->requests) {
+        if (ngx_event_udp_accept(c) != NGX_OK) {
             ngx_stream_proxy_finalize(s, NGX_STREAM_INTERNAL_SERVER_ERROR);
             return;
         }
@@ -801,14 +824,16 @@ ngx_stream_proxy_init_upstream(ngx_stream_session_t *s)
 
 #if (NGX_STREAM_SSL)
 
-    if (pc->type == SOCK_STREAM && pscf->ssl) {
+    if (pscf->ssl) {
 
-        if (u->proxy_protocol) {
-            if (ngx_stream_proxy_send_proxy_protocol(s) != NGX_OK) {
-                return;
+        if (pc->type == SOCK_STREAM) {
+            if (u->proxy_protocol) {
+                if (ngx_stream_proxy_send_proxy_protocol(s) != NGX_OK) {
+                    return;
+                }
+
+                u->proxy_protocol = 0;
             }
-
-            u->proxy_protocol = 0;
         }
 
         if (pc->ssl == NULL) {
@@ -1109,6 +1134,8 @@ static void
 ngx_stream_proxy_ssl_handshake(ngx_connection_t *pc)
 {
     long                          rc;
+    u_char                       *p;
+    ngx_connection_t             *c;
     ngx_stream_session_t         *s;
     ngx_stream_upstream_t        *u;
     ngx_stream_proxy_srv_conf_t  *pscf;
@@ -1141,6 +1168,29 @@ ngx_stream_proxy_ssl_handshake(ngx_connection_t *pc)
 
         if (pc->write->timer_set) {
             ngx_del_timer(pc->write);
+        }
+
+        c = s->connection;
+
+        if (c->shared && pscf->requests) {
+
+            if (ngx_event_udp_accept(c) != NGX_OK) {
+                ngx_stream_proxy_finalize(s, NGX_STREAM_INTERNAL_SERVER_ERROR);
+                return;
+            }
+
+            p = ngx_pnalloc(c->pool, pscf->buffer_size);
+            if (p == NULL) {
+                ngx_stream_proxy_finalize(s, NGX_STREAM_INTERNAL_SERVER_ERROR);
+                return;
+            }
+
+            u = s->upstream;
+
+            u->downstream_buf.start = p;
+            u->downstream_buf.end = p + pscf->buffer_size;
+            u->downstream_buf.pos = p;
+            u->downstream_buf.last = p;
         }
 
         ngx_stream_proxy_init_upstream(s);
@@ -1718,6 +1768,15 @@ ngx_stream_proxy_process(ngx_stream_session_t *s, ngx_uint_t from_upstream,
                     }
                 }
 
+                if (c->type == SOCK_DGRAM && from_upstream) {
+                    u->responses++;
+                }
+
+                if (c->type == SOCK_DGRAM && u->responses == pscf->responses) {
+                    src->read->ready = 0;
+                    src->read->eof = 1;
+                }
+
                 for (ll = out; *ll; ll = &(*ll)->next) { /* void */ }
 
                 cl = ngx_chain_get_free_buf(c->pool, &u->free);
@@ -2080,6 +2139,7 @@ ngx_stream_proxy_create_srv_conf(ngx_conf_t *cf)
     conf->download_rate = NGX_CONF_UNSET_PTR;
     conf->requests = NGX_CONF_UNSET_UINT;
     conf->responses = NGX_CONF_UNSET_UINT;
+    conf->requests = NGX_CONF_UNSET_UINT;
     conf->next_upstream_tries = NGX_CONF_UNSET_UINT;
     conf->next_upstream = NGX_CONF_UNSET;
     conf->proxy_protocol = NGX_CONF_UNSET;
@@ -2131,6 +2191,9 @@ ngx_stream_proxy_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 
     ngx_conf_merge_uint_value(conf->responses,
                               prev->responses, NGX_MAX_INT32_VALUE);
+
+    ngx_conf_merge_uint_value(conf->requests,
+                              prev->requests, NGX_MAX_INT32_VALUE);
 
     ngx_conf_merge_uint_value(conf->next_upstream_tries,
                               prev->next_upstream_tries, 0);
@@ -2289,6 +2352,34 @@ ngx_stream_proxy_set_ssl(ngx_conf_t *cf, ngx_stream_proxy_srv_conf_t *pscf)
     }
 
     return NGX_OK;
+}
+
+
+static
+char *ngx_stream_proxy_set_ssl_protocols(ngx_conf_t *cf, ngx_command_t *cmd,
+    void *conf)
+{
+    ngx_stream_proxy_srv_conf_t *pscf = conf;
+
+    char  *rv;
+
+    rv = ngx_conf_set_bitmask_slot(cf, cmd, conf);
+
+    if (rv != NGX_CONF_OK) {
+        return rv;
+    }
+
+    /* DTLS protocol requires corresponding TLS version to be set */
+
+    if (pscf->ssl_protocols & NGX_SSL_DTLSv1) {
+        pscf->ssl_protocols |= NGX_SSL_TLSv1;
+    }
+
+    if (pscf->ssl_protocols & NGX_SSL_DTLSv1_2) {
+        pscf->ssl_protocols |= NGX_SSL_TLSv1_2;
+    }
+
+    return NGX_CONF_OK;
 }
 
 #endif
