@@ -2138,7 +2138,6 @@ ngx_stream_proxy_create_srv_conf(ngx_conf_t *cf)
     conf->download_rate = NGX_CONF_UNSET_PTR;
     conf->requests = NGX_CONF_UNSET_UINT;
     conf->responses = NGX_CONF_UNSET_UINT;
-    conf->requests = NGX_CONF_UNSET_UINT;
     conf->next_upstream_tries = NGX_CONF_UNSET_UINT;
     conf->next_upstream = NGX_CONF_UNSET;
     conf->proxy_protocol = NGX_CONF_UNSET;
@@ -2190,9 +2189,6 @@ ngx_stream_proxy_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 
     ngx_conf_merge_uint_value(conf->responses,
                               prev->responses, NGX_MAX_INT32_VALUE);
-
-    ngx_conf_merge_uint_value(conf->requests,
-                              prev->requests, NGX_MAX_INT32_VALUE);
 
     ngx_conf_merge_uint_value(conf->next_upstream_tries,
                               prev->next_upstream_tries, 0);
