@@ -1801,8 +1801,6 @@ ngx_ssl_handshake(ngx_connection_t *c)
     }
 
 #if defined(NGX_HAVE_DTLS)
-    ngx_int_t  rc;
-
     if (c->type == SOCK_DGRAM && !c->ssl->client
         && !c->ssl->dtls_cookie_accepted)
     {
