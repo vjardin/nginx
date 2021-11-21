@@ -456,9 +456,17 @@ ngx_stream_proxy_handler(ngx_stream_session_t *s)
         return;
     }
 
+    printf("%s:%d XXXXXX c->type=%s c->ssl=%p c->shared=%d pscf->requests=%ld\n",
+           __func__, __LINE__,
+           c->type == SOCK_STREAM ? "SOCK_STREAM" : "SOCK_DGRAM",
+           c->ssl,
+           c->shared,
+           pscf->requests);
+#if 0
     if (c->type == SOCK_STREAM || (c->type == SOCK_DGRAM && c->ssl)
         || (c->shared && pscf->requests))
     {
+#endif
         p = ngx_pnalloc(c->pool, pscf->buffer_size);
         if (p == NULL) {
             ngx_stream_proxy_finalize(s, NGX_STREAM_INTERNAL_SERVER_ERROR);
@@ -473,7 +481,9 @@ ngx_stream_proxy_handler(ngx_stream_session_t *s)
         if (c->read->ready) {
             ngx_post_event(c->read, &ngx_posted_events);
         }
+#if 0
     }
+#endif
 
     if (pscf->upstream_value) {
         if (ngx_stream_proxy_eval(s, pscf) != NGX_OK) {
@@ -482,12 +492,14 @@ ngx_stream_proxy_handler(ngx_stream_session_t *s)
         }
     }
 
+#if 0
     if (c->shared && pscf->requests) {
         if (ngx_event_udp_accept(c) != NGX_OK) {
             ngx_stream_proxy_finalize(s, NGX_STREAM_INTERNAL_SERVER_ERROR);
             return;
         }
     }
+#endif
 
     if (u->resolved == NULL) {
 
@@ -1767,6 +1779,7 @@ ngx_stream_proxy_process(ngx_stream_session_t *s, ngx_uint_t from_upstream,
                     }
                 }
 
+#if 0
                 if (c->type == SOCK_DGRAM && from_upstream) {
                     u->responses++;
                 }
@@ -1775,6 +1788,7 @@ ngx_stream_proxy_process(ngx_stream_session_t *s, ngx_uint_t from_upstream,
                     src->read->ready = 0;
                     src->read->eof = 1;
                 }
+#endif
 
                 for (ll = out; *ll; ll = &(*ll)->next) { /* void */ }
 
