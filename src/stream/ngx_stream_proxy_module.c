@@ -492,6 +492,10 @@ ngx_stream_proxy_handler(ngx_stream_session_t *s)
         }
     }
 
+    printf("%s:%d XXXXXX c->shared=%d pscf->requests=%ld\n",
+           __func__, __LINE__,
+           c->shared,
+           pscf->requests);
 #if 0
     if (c->shared && pscf->requests) {
         if (ngx_event_udp_accept(c) != NGX_OK) {
@@ -1779,6 +1783,12 @@ ngx_stream_proxy_process(ngx_stream_session_t *s, ngx_uint_t from_upstream,
                     }
                 }
 
+                printf("%s:%d XXXXXX c->type=%s from_upstream=%ld u->responses=%ld pscf->responses=%ld\n",
+                       __func__, __LINE__,
+                       c->type == SOCK_STREAM ? "SOCK_STREAM" : "SOCK_DGRAM",
+                       from_upstream,
+                       u->responses,
+                       pscf->responses);
 #if 0
                 if (c->type == SOCK_DGRAM && from_upstream) {
                     u->responses++;
